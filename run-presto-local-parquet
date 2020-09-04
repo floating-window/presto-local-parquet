@@ -64,6 +64,9 @@ if [[ -z ${ACCESS_KEY} ]]; then
       exit 1
     fi
   fi
+
+  # TODO: Check that the '.minio.sys' directory was created by this container;
+  #       if not (but we do have an existing key), we should probably just exit.
 fi
 
 printf "\nThe following subdirectories of ${DATA_DIR} will be available as "\
@@ -77,7 +80,14 @@ if ! [[ ${REPLY} == "y" || ${REPLY} == "yes" ]]; then
   exit 0
 fi
 
-printf "\nStarting MinIO...\n"
+printf "%s\n" \
+  "" \
+  "Starting MinIO..." \
+  "" \
+  "Keys for accessing Web UI:" \
+  "Access Key: ${ACCESS_KEY}" \
+  "Secret Key: ${SECRET_KEY}" \
+  ""
 MINIO_ACCESS_KEY=${ACCESS_KEY} MINIO_SECRET_KEY=${SECRET_KEY} minio server \
   ${DATA_DIR} > /tmp/minio.log 2>&1 &
 
