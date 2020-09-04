@@ -74,10 +74,12 @@ printf "\nThe following subdirectories of ${DATA_DIR} will be available as "\
 for d in ${DATA_DIR}/*/; do
   basename ${d}
 done
-printf "\nProceed? [yes/no]\n"
-read
-if ! [[ ${REPLY} == "y" || ${REPLY} == "yes" ]]; then
-  exit 0
+if [[ -t 0 ]]; then
+  printf "\nProceed? [yes/no]\n"
+  read
+  if ! [[ ${REPLY} == "y" || ${REPLY} == "yes" ]]; then
+    exit 0
+  fi
 fi
 
 printf "%s\n" \
@@ -91,45 +93,54 @@ printf "%s\n" \
 MINIO_ACCESS_KEY=${ACCESS_KEY} MINIO_SECRET_KEY=${SECRET_KEY} minio server \
   ${DATA_DIR} > /tmp/minio.log 2>&1 &
 
-# Ugly hack to wait for startup, and print logs to stdout until then.
-grep -q "${MINIO_STARTUP_SUCCESS_LINE}" <(tail -f /tmp/minio.log | tee /dev/tty)
+if ! [[ -t 0 ]]; then
+  # Running in non-interactive mode, just start the Presto server.
+  /usr/lib/presto/bin/run-presto
+else
+  # Do things one at a time, run Presto server in the background, and then run
+  # a Presto shell.
 
-printf "\n\nStarting Presto...\n"
-/usr/lib/presto/bin/run-presto > /tmp/presto.log 2>&1 &
+  # Ugly hack to wait for startup, and print logs to stdout until then.
+  grep -q "${MINIO_STARTUP_SUCCESS_LINE}" \
+    <(tail -f /tmp/minio.log | tee /dev/tty)
 
-# .. and again.
-grep -q "${PRESTO_STARTUP_SUCCESS_LINE}" \
-  <(tail -f /tmp/presto.log | tee /dev/tty)
+  printf "\n\nStarting Presto...\n"
+  /usr/lib/presto/bin/run-presto > /tmp/presto.log 2>&1 &
 
-printf "%b\n" \
-  "\nStarting Presto Shell...\n" \
-  "You need to define a schema for your data before you can query it, eg:\n" \
-  "CREATE SCHEMA hive.default;" \
-  "USE hive.default;" \
-  "CREATE TABLE local_parquet (" \
-  "  some_string VARCHAR," \
-  "  some_int INTEGER," \
-  "  some_float REAL," \
-  "  some_group ROW(" \
-  "    some_int INTEGER," \
-  "    some_nested_group ROW(" \
-  "      some_int INTEGER," \
-  "      some_string VARCHAR," \
-  "    )," \
-  "  )," \
-  "  some_repeated_field ARRAY(" \
-  "    some_val integer," \
-  "  )" \
-  "  some_repeated_group ARRAY(" \
-  "    ROW(" \
-  "      some_string VARCHAR," \
-  "      some_other_string VARCHAR" \
-  "    )" \
-  "  )" \
-  ") WITH (" \
-  "  external_location='s3://some-bucket/'," \
-  "  format = 'PARQUET'" \
-  ");\n"
+  # .. and again.
+  grep -q "${PRESTO_STARTUP_SUCCESS_LINE}" \
+    <(tail -f /tmp/presto.log | tee /dev/tty)
 
-# Run the presto shell.
-presto
+  printf "%b\n" \
+    "\nStarting Presto Shell...\n" \
+    "You need to define a schema for your data before you can query it, eg:\n" \
+    "CREATE SCHEMA hive.default;" \
+    "USE hive.default;" \
+    "CREATE TABLE local_parquet (" \
+    "  some_string VARCHAR," \
+    "  some_int INTEGER," \
+    "  some_float REAL," \
+    "  some_group ROW(" \
+    "    some_int INTEGER," \
+    "    some_nested_group ROW(" \
+    "      some_int INTEGER," \
+    "      some_string VARCHAR," \
+    "    )," \
+    "  )," \
+    "  some_repeated_field ARRAY(" \
+    "    some_val integer," \
+    "  )" \
+    "  some_repeated_group ARRAY(" \
+    "    ROW(" \
+    "      some_string VARCHAR," \
+    "      some_other_string VARCHAR" \
+    "    )" \
+    "  )" \
+    ") WITH (" \
+    "  external_location='s3://some-bucket/'," \
+    "  format = 'PARQUET'" \
+    ");\n"
+
+  # Run the presto shell.
+  presto
+fi
