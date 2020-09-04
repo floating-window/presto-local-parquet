@@ -1,0 +1,125 @@
+#!/bin/bash
+
+DATA_DIR=/parquet
+HIVE_CONFIG=/usr/lib/presto/default/etc/catalog/hive.properties
+
+MINIO_STARTUP_SUCCESS_LINE="dotnet-client-quickstart-guide"
+PRESTO_STARTUP_SUCCESS_LINE="SERVER STARTED"
+
+if [[ ! -d ${DATA_DIR} ]]; then
+  printf "%s\n\n" \
+    "Couldn't find local data directory ${DATA_DIR}." \
+    "Please check bind mounts and run again, eg:"
+  printf "%b" "  docker run -it --mount source=/<path-to-parquet-files>/," \
+                                       "destination=/parquet,type=bind " \
+                                       "presto-local-parquet\n"
+  exit 1
+fi
+
+# MinIO keeps a config directory called '.minio.sys' in the main 'export' dir. 
+#
+# It is unfortately not possible to avoid writing this to the host, because:
+#
+# - symlinks inside the export dir are not followed
+#   https://github.com/harshavardhana/minio/commit/b792cb241efcb67d641896c915d032e66dd2e204
+#
+# - mounting into a subdir of the export dir is not allowed
+#   https://github.com/minio/minio/blob/36d36fab0bfeb0e91099e852408d0e1ac2e06440/pkg/mountinfo/mountinfo_linux.go#L108
+#
+# For bonus fun, the config directory is encrypted, so we need to remove it 
+# every time we change keys.
+
+# Try to read existing "AWS" keys for MinIO.
+ACCESS_KEY=$(cat ${HIVE_CONFIG} | grep access-key | cut -f 2 -d =)
+SECRET_KEY=$(cat ${HIVE_CONFIG} | grep secret-key | cut -f 2 -d =)
+
+if [[ -z ${ACCESS_KEY} ]]; then
+  # Generate new keys.
+  ACCESS_KEY=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c 32)
+  SECRET_KEY=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c 32)
+
+  # Configure Presto to use the new keys.
+  echo "hive.s3.aws-access-key=${ACCESS_KEY}" >> ${HIVE_CONFIG}
+  echo "hive.s3.aws-secret-key=${SECRET_KEY}" >> ${HIVE_CONFIG}
+
+  # We will need to remove any existing MinIO config directories as we no 
+  # longer have the associated keys.
+  MINIO_CONFIG_DIR=${DATA_DIR}/.minio.sys
+  if [[ -d ${MINIO_CONFIG_DIR} ]]; then
+    printf "%b\n" \
+      "Found existing MinIO config directory:" \
+      "${MINIO_CONFIG_DIR}" \
+      "" \
+      "This is expected if you have previously used presto-local-parquet "\
+"with this data." \
+      "" \
+      "The existing MinIO config directory must be deleted to continue; "\
+"no other files will be removed." \
+      "" \
+      "Proceed? [yes/no]" 
+    read
+    if [[ ${REPLY} == "y" || ${REPLY} == "yes" ]]; then
+      rm -rf ${MINIO_CONFIG_DIR} 
+    else
+      exit 1
+    fi
+  fi
+fi
+
+printf "\nThe following subdirectories of ${DATA_DIR} will be available as "\
+"S3 buckets in Presto:\n\n"
+for d in ${DATA_DIR}/*/; do
+  basename ${d}
+done
+printf "\nProceed? [yes/no]\n"
+read
+if ! [[ ${REPLY} == "y" || ${REPLY} == "yes" ]]; then
+  exit 0
+fi
+
+printf "\nStarting MinIO...\n"
+MINIO_ACCESS_KEY=${ACCESS_KEY} MINIO_SECRET_KEY=${SECRET_KEY} minio server \
+  ${DATA_DIR} > /tmp/minio.log 2>&1 &
+
+# Ugly hack to wait for startup, and print logs to stdout until then.
+grep -q "${MINIO_STARTUP_SUCCESS_LINE}" <(tail -f /tmp/minio.log | tee /dev/tty)
+
+printf "\n\nStarting Presto...\n"
+/usr/lib/presto/bin/run-presto > /tmp/presto.log 2>&1 &
+
+# .. and again.
+grep -q "${PRESTO_STARTUP_SUCCESS_LINE}" \
+  <(tail -f /tmp/presto.log | tee /dev/tty)
+
+printf "%b\n" \
+  "\nStarting Presto Shell...\n" \
+  "You need to define a schema for your data before you can query it, eg:\n" \
+  "CREATE SCHEMA hive.default;" \
+  "USE hive.default;" \
+  "CREATE TABLE local_parquet (" \
+  "  some_string VARCHAR," \
+  "  some_int INTEGER," \
+  "  some_float REAL," \
+  "  some_group ROW(" \
+  "    some_int INTEGER," \
+  "    some_nested_group ROW(" \
+  "      some_int INTEGER," \
+  "      some_string VARCHAR," \
+  "    )," \
+  "  )," \
+  "  some_repeated_field ARRAY(" \
+  "    some_val integer," \
+  "  )" \
+  "  some_repeated_group ARRAY(" \
+  "    ROW(" \
+  "      some_string VARCHAR," \
+  "      some_other_string VARCHAR" \
+  "    )" \
+  "  )" \
+  ") WITH (" \
+  "  external_location='s3://some-bucket/'," \
+  "  format = 'PARQUET'" \
+  ");\n"
+
+# Run the presto shell.
+presto
