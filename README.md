@@ -28,7 +28,8 @@ docker run -it --rm --mount source=/<data-dir>/,destination=/parquet,type=bind p
 
 ### With Presto Web UI
 
-The Web UI shows the status of Presto, access at http://127.0.0.1:8080 with username `admin` (no password required).
+The Web UI shows the status of Presto, access at http://127.0.0.1:8080 with
+username `admin` (no password required).
 
 ```shell
 docker run -it --rm -p 8080:8080 --mount source=/<data-dir>/,destination=/parquet,type=bind presto-local-parquet
@@ -62,6 +63,47 @@ docker start -i presto-lp
 
 ### Removing the container
 
+```shell
+docker container rm presto-lp
+```
+
+## Separate server/client
+
+Leave the server running in the background and run (and quit) the shell
+independently.
+
+> The server will not start if a `.minio.sys` directory already exists. This
+must be deleted manually before starting the server in detached mode.
+
+### Server 
+
+```shell
+docker run -d --mount source=/<data-dir>/,destination=/parquet,type=bind --name presto-lp presto-local-parquet
+```
+
+### Server, with Presto Web UI
+
+See above for details on accessing the UI.
+
+```shell
+docker run -d -p 8080:8080 --mount source=/<data-dir>/,destination=/parquet,type=bind --name presto-lp presto-local-parquet
+```
+
+### Client
+
+Exit shell with `Ctrl+D`
+
+```shell
+docker exec -it presto-lp presto
+```
+
+### Stopping the Server
+
+```shell
+docker stop presto-lp
+```
+
+### Removing the container
 ```shell
 docker container rm presto-lp
 ```
